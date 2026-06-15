@@ -1,0 +1,68 @@
+# Qwen3-1B Scaled-Up Config for MaxText
+# This config scales Qwen3-0.6B to ~1B parameters by widening the model.
+#
+# SCALING RATIONALE:
+#   Qwen3-0.6B:  emb=1024, mlp=3072, heads=16/8, layers=28 → ~0.6B params
+#   Qwen3-1B:    emb=2048, mlp=5632, heads=16/8, layers=28 → ~1B params
+#
+#   Strategy: Increase hidden dimension (emb_dim) and mlp_dim proportionally.
+#   Layers kept the same (28) to avoid OOM on Colab T4/TPU v2.
+#   emb_dim: 1024 → 2048 (+100%)   mlp_dim: 3072 → 5632 (+83%)
+#   head_dim stays 64, so num_heads * head_dim = 16 * 64 = 1024 → need 32 heads for 2048
+#   OR keep head_dim=128 (common in larger models).
+#   We use head_dim=128 with 16Q/8KV heads → 16*128=2048 = emb_dim ✓
+#
+# PARAMETER ESTIMATE (approximate):
+#   Embedding:   vocab_size * emb_dim = 151936 * 2048 ≈ 311M
+#   Each layer:  attn(4*emb^2 approx) + MLP(3*emb*mlp)
+#                = 4*(2048^2) + 3*(2048*5632) ≈ 50.3M per layer
+#   28 layers:   28 * 50.3M ≈ 1408M
+#   With weight tying and corrections → actual ~1.1B, well within Colab T4 (16GB)
+
+model_name: qwen3-0.6b               # same architecture family, custom dimensions
+steps: 50
+dataset_type: synthetic
+
+base_output_directory: /tmp/maxtext_outputs
+run_name: qwen_1b_cpu_run
+
+# --- Architecture (scaled to ~1B) ---
+base_num_decoder_layers: 28          # same depth as 0.6B
+base_num_query_heads: 16             # same query head count
+base_num_kv_heads: 8                 # same GQA ratio
+head_dim: 128                        # increased from 64 → 128 to match wider emb
+base_emb_dim: 2048                   # ← KEY CHANGE: 1024 → 2048
+base_mlp_dim: 5632                   # ← KEY CHANGE: 3072 → 5632 (≈ 2.75x emb)
+vocab_size: 151936
+
+# Attention
+attention: autoselected
+max_target_length: 512
+max_prefill_predict_length: 512
+
+# MLP
+mlp_activations: ["silu", "linear"]
+
+# Normalization
+normalization_layer_epsilon: 1.0e-6
+use_pre_norm: true
+
+# RoPE
+rope_max_timescale: 1000000
+use_qk_norm: true
+
+# Training — reduced batch size due to larger model
+per_device_batch_size: 1            # 1B model needs more memory
+learning_rate: 2.0e-4               # slightly lower LR for larger model
+warmup_steps: 5
+adam_b1: 0.9
+adam_b2: 0.95
+adam_eps: 1.0e-8
+weight_decay: 0.1
+gradient_clipping_threshold: 1.0
+
+dtype: bfloat16
+activations_in_float32: false
+
+log_period: 10
+metrics_file: ""

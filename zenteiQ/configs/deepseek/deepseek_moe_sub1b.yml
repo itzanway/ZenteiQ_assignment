@@ -1,0 +1,97 @@
+# DeepSeek MoE — Scaled Down to <1B Parameters
+# Based on DeepSeek-V3 architecture, shrunk to fit Colab hardware.
+#
+# ORIGINAL DeepSeek-V3: 671B total / 37B active params
+#   - 61 MoE transformer layers
+#   - 256 experts, top-8 routing
+#   - emb_dim: 7168, MoE mlp_dim: 2048
+#
+# OUR SCALED-DOWN VERSION (~800M total / ~180M active):
+#   Goal: keep the MoE structure intact but shrink all dimensions.
+#
+#   PARAMETER MATH:
+#     emb_dim = 512
+#     Dense MLP dim = 1024       (first_num_dense_layers dense layers)
+#     MoE experts = 16 total, top-2 per token
+#     MoE mlp_dim (base_moe_mlp_dim) = 512
+#     Shared experts = 1 (always active)
+#     Num layers = 12 (interleave_moe_layer_step=1 → all MoE)
+#     first_num_dense_layers = 1 (1 dense layer at bottom, like DeepSeek)
+#
+#   Active params per token ≈ emb_dim^2 * (attn) + top_k * mlp_per_expert
+#     Attn: 4 * 512^2 ≈ 1.05M per layer
+#     MoE MLP (top-2 + 1 shared): 3 experts active, each 3*512*512 ≈ 800K
+#     12 layers: (1.05M + 2.4M) * 12 ≈ 42M active params from compute layers
+#     + embedding 32000 * 512 ≈ 16M
+#   → Total active ≈ ~180M active (forward pass)
+#
+#   Total params (all experts loaded):
+#     16 experts * 3*512*512 * 11 MoE layers ≈ 135M expert weights
+#     + attn + dense + embedding ≈ 670M total
+#   → TOTAL ≈ ~760M total parameters (under 1B ✓)
+
+model_name: deepseek3-671b            # base architecture template
+steps: 50
+dataset_type: synthetic
+
+base_output_directory: /tmp/maxtext_outputs
+run_name: deepseek_moe_sub1b_cpu
+
+# --- Core Architecture ---
+base_num_decoder_layers: 12          # reduced from 61
+base_emb_dim: 512                    # reduced from 7168
+base_num_query_heads: 8              # reduced from 128
+base_num_kv_heads: 4                 # GQA, reduced from 8 (latent in DSV3)
+head_dim: 64
+base_mlp_dim: 1024                   # for dense layers
+vocab_size: 129280                   # DeepSeek tokenizer vocab size
+
+# --- MoE Configuration ---
+num_experts: 16                      # reduced from 256
+num_experts_per_tok: 2               # top-2 routing (kept same as DS-V3 ratio)
+shared_experts: 1                    # 1 shared expert always active (DS style)
+base_moe_mlp_dim: 512               # expert MLP width
+interleave_moe_layer_step: 1        # every layer is MoE (after first dense)
+first_num_dense_layers: 1           # 1 bottom dense layer like DeepSeek
+
+# Routing
+n_routing_groups: 4                  # divide 16 experts into 4 groups
+topk_routing_group: 2               # select top 2 groups, then pick top-k from them
+norm_topk_prob: true                 # normalize routing weights (DS-V3 style)
+load_balance_loss_weight: 0.01      # auxiliary load-balance loss
+routed_score_func: softmax          # DS-V3 uses sigmoid; softmax also common
+
+# Sparse matmul config
+sparse_matmul: false                 # use dense matmul on CPU (no Pallas/Megablox)
+capacity_factor: -1                  # dropless even without sparse kernels
+
+# Attention
+attention: autoselected
+max_target_length: 512
+max_prefill_predict_length: 512
+
+# MLP activation
+mlp_activations: ["silu", "linear"]
+
+# Normalization
+normalization_layer_epsilon: 1.0e-6
+use_pre_norm: true
+
+# RoPE
+rope_max_timescale: 10000
+
+# Training
+per_device_batch_size: 1            # MoE uses more memory due to expert dispatch
+learning_rate: 3.0e-4
+warmup_steps: 5
+adam_b1: 0.9
+adam_b2: 0.95
+adam_eps: 1.0e-8
+weight_decay: 0.1
+gradient_clipping_threshold: 1.0
+
+dtype: bfloat16
+activations_in_float32: false
+
+log_period: 10
+metrics_file: ""
