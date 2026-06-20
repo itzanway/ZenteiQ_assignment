@@ -98,8 +98,3 @@ CPU / GPU / TPU runtimes. See `analysis/final_summary.md` for the table structur
 `results/*/README.md` for what files belong where.
 
 ---
-
-## Read next
-
-- **[Task 1 — Data Formats](docs/task1_data_formats.md)**
-- **[Final Analysis](analysis/final_summary.md)**
